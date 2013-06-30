@@ -16,6 +16,7 @@ import numpy as np
 
 from hyperopt.pyll import scope
 from hyperopt import hp
+import hyperopt
 import sklearn.decomposition
 import sklearn.mixture
 import sklearn.tree
@@ -32,7 +33,7 @@ def compute_evaluation(config, cv_split_filename,
     """Evaluate a model on a given CV split"""
     # All module imports should be executed in the worker namespace to make
     # possible to run an an engine node.
-    from time import time
+    from time import time, sleep
     from sklearn.externals import joblib
 
     time_start = time()
@@ -48,16 +49,22 @@ def compute_evaluation(config, cv_split_filename,
     X_train = X_train[:n_samples_train]
     y_train = y_train[:n_samples_train]
 
+    pre_processing.fit(X_train)
+    X_train_pp = pre_processing.transform(X_train)
+
     # Fit model and measure training time
     tick = time()
-    classifier.fit(X_train, y_train)
+    classifier.fit(X_train_pp, y_train)
     train_time = time() - tick
 
     # Compute score on training set
-    train_score = classifier.score(X_train, y_train)
+    train_score = classifier.score(X_train_pp, y_train)
 
     # Compute score on test set
-    test_score = classifier.score(X_test, y_test)
+    X_test_pp = pre_processing.transform(X_test)
+    test_score = classifier.score(X_test_pp, y_test)
+
+    sleep(3)
 
     time_end = time()
 
@@ -79,17 +86,10 @@ def main():
     client = Client()
     print 'n. clients: ', len(client)
 
-    lb_view = client.load_balanced_view()
-
     digits = load_digits()
 
     X = MinMaxScaler().fit_transform(digits.data)
     y = digits.target
-
-    digits_cv_split_filenames = mmap_utils.persist_cv_splits(
-                X, y, name='digits_10', n_cv_iter=10)
-
-    mmap_utils.warm_mmap_on_cv_splits(client, digits_cv_split_filenames)
 
     pre_processing = hp.choice('preproc_algo', [
         scope.PCA(
@@ -119,18 +119,21 @@ def main():
     sklearn_space = {'pre_processing': pre_processing,
                      'classifier': classifier}
 
+    digits_cv_split_filenames = mmap_utils.persist_cv_splits(
+                X, y, name='digits_10', n_cv_iter=10)
 
-    linear_svc_search = hyperselect.SequentialSeach(lb_view)
+    mmap_utils.warm_mmap_on_cv_splits(client, digits_cv_split_filenames)
 
-    linear_svc_search.launch_for_splits(
+    trials = hyperselect.IPythonTrials(client)
+    trials.fmin(
         partial(compute_evaluation,
             cv_split_filename=digits_cv_split_filenames[0],
             ),
         sklearn_space,
+        algo=hyperopt.tpe.suggest,
+        max_evals=30,
+        verbose=1,
         )
-
-
-    linear_svc_search.trials.refresh()
-    for trial in linear_svc_search.trials.trials:
-        print trial['result']
+    trials.wait()
+    print trials.best_trial
 

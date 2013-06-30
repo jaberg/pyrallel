@@ -65,3 +65,24 @@ def warm_mmap_on_cv_splits(client, cv_split_filenames):
 
     cv_split_filenames = [os.path.abspath(f) for f in cv_split_filenames]
     hosts_view.apply_sync(load_in_memory, cv_split_filenames)
+
+
+if 0:
+    # XXX delete all this  - what's it for?
+  class MemmapOnWorkers(object):
+    def __init__(self, pre_warm=True, collect_files_on_reset=False):
+        self._temp_files = []
+        # Mark the files for garbage collection
+        if collect_files_on_reset:
+            self._temp_files.extend(cv_split_filenames)
+
+        # Warm the OS disk cache on each host with sequential reads instead
+        # of having concurrent evaluation tasks compete for the the same host
+        # disk resources later.
+        if pre_warm:
+            warm_mmap_on_cv_splits(self.lb_view.client, cv_split_filenames)
+
+        cv_split_filenames=()
+
+
+
